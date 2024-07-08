@@ -34,7 +34,10 @@ async def handler(websocket):
         PLAYERS[client_id] = (event["x"], event["y"], event["z"])
 
         async for message in websocket:
-            print(message)
+            event = json.loads(message)
+            if event["type"] == "update":
+                # TODO do not message the messenger
+                message_all(message)
 
     finally:
         LIVE_CONNECTIONS.remove(websocket)
