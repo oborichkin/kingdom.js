@@ -29,9 +29,21 @@ async def handler(websocket):
             "x": event["x"],
             "y": event["y"],
             "z": event["z"]}))
+
         LIVE_CONNECTIONS.add(websocket)
 
-        PLAYERS[client_id] = (event["x"], event["y"], event["z"])
+        PLAYERS[client_id] = {
+            "position": {
+                "x": event["x"],
+                "y": event["y"],
+                "z": event["z"],
+            },
+            "target": {
+                "x": event["x"],
+                "y": event["y"],
+                "z": event["z"],
+            }
+        }
 
         async for message in websocket:
             event = json.loads(message)

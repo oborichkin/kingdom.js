@@ -9,14 +9,14 @@ document.body.appendChild(stats.dom)
 
 let renderer, scene, camera, controls;
 
-const currentPosition = new THREE.Vector3(randFloat(-50, 50), 0, randFloat(-50, 50))
-let targetPosition = new THREE.Vector3(currentPosition.x, currentPosition.y, currentPosition.z)
-
 const websocket = new WebSocket("ws://localhost:8001")
 
-const player_id = crypto.randomUUID()
+let player_map = {}
+let player_targets = {}
 
-let players = {}
+const player_id = crypto.randomUUID()
+const currentPosition = new THREE.Vector3(randFloat(-50, 50), 0, randFloat(-50, 50))
+player_targets[player_id] = currentPosition
 
 const TERRAIN_LAYER = 1
 
@@ -62,6 +62,7 @@ window.addEventListener('pointermove', (event) => {
 
 scene.add(new THREE.AxesHelper(40))
 
+// grid
 const geometry = new THREE.PlaneGeometry(100, 100, 10, 10)
 const material = new THREE.MeshBasicMaterial({ wireframe: true, opacity: 0.5, transparent: true})
 const grid = new THREE.Mesh(geometry, material)
@@ -71,21 +72,24 @@ grid.rotation.x = - Math.PI / 2
 grid.layers.enable(1)
 scene.add(grid)
 
-window.addEventListener('click', (event) => {
-    raycaster.setFromCamera(pointer, camera)
-    const intersects = raycaster.intersectObjects(scene.children)
-
-    if (intersects.length > 0) {
-        targetPosition = new THREE.Vector3(...intersects[0].point)
-    }
-
-})
-
 const geometry2 = new THREE.BoxGeometry(10, 10, 10)
 const material2 = new THREE.MeshNormalMaterial()
 const mesh = new THREE.Mesh(geometry2, material2)
 mesh.position.set(currentPosition.x, currentPosition.y, currentPosition.z)
 scene.add(mesh)
+player_map[player_id] = mesh
+
+
+window.addEventListener('click', (event) => {
+    raycaster.setFromCamera(pointer, camera)
+    const intersects = raycaster.intersectObjects(scene.children)
+
+    if (intersects.length > 0) {
+        player_targets[player_id] = new THREE.Vector3(...intersects[0].point)
+        websocket.send(JSON.stringify({type: "update", id: player_id, target: {...intersects[0].point}}))
+    }
+
+})
 
 websocket.onopen = function (event) {
     websocket.send(JSON.stringify({
@@ -97,39 +101,28 @@ websocket.onopen = function (event) {
     }))
 }
 
-function syncPosition() {
-    websocket.send(JSON.stringify({
-        "type": "update",
-        "id": player_id,
-        x: mesh.position.x,
-        y: mesh.position.y,
-        z: mesh.position.z
-    }))
-}
-
-window.setInterval(syncPosition, 1000)
-
 websocket.addEventListener("message", ({ data }) => {
     const event = JSON.parse(data)
     switch (event.type) {
         case "init":
-            for (const [id, position] of Object.entries(event.players)) {
+            for (const [id, remote_data] of Object.entries(event.players)) {
                 var geo = new THREE.BoxGeometry(10, 10, 10)
                 var mat = new THREE.MeshNormalMaterial()
                 var mesh = new THREE.Mesh(geo, mat)
-                mesh.position.setX(position[0])
-                mesh.position.setY(position[1])
-                mesh.position.setZ(position[2])
+                mesh.position.setX(remote_data.position.x)
+                mesh.position.setY(remote_data.position.y)
+                mesh.position.setZ(remote_data.position.z)
                 scene.add(mesh)
-                players[id] = mesh.uuid
+                player_map[id] = mesh
+                player_targets[id] = new THREE.Vector3(remote_data.target.x, remote_data.target.y, remote_data.target.z)
             }
             break;
         case "remove":
-            var object = scene.getObjectByProperty('uuid', players[event.id])
-            object.geometry.dispose()
-            object.material.dispose()
-            scene.remove(object)
-            delete players[event.id]
+            player_map[event.id].geometry.dispose()
+            player_map[event.id].material.dispose()
+            scene.remove(player_map[event.id])
+            delete player_map[event.id]
+            delete player_targets[event.id]
             break;
         case "add":
             var geo = new THREE.BoxGeometry(10, 10, 10)
@@ -139,14 +132,12 @@ websocket.addEventListener("message", ({ data }) => {
             mesh.position.setY(event.y)
             mesh.position.setZ(event.z)
             scene.add(mesh)
-            players[event.id] = mesh.uuid
+            player_map[event.id] = mesh
+            player_targets[event.id] = new THREE.Vector3(mesh.position.x, mesh.position.y, mesh.position.z)
             break;
         case "update":
-            if (event.id in players) {
-                var object = scene.getObjectByProperty('uuid', players[event.id])
-                object.position.setX(event.x)
-                object.position.setY(event.y)
-                object.position.setZ(event.z)
+            if (event.id != player_id && event.id in player_map) {
+                player_targets[event.id] = new THREE.Vector3(event.target.x, event.target.y, event.target.z)
             }
             break;
         default:
@@ -159,9 +150,11 @@ function animate() {
 
     controls.update()
 
-    mesh.position.lerp(targetPosition, 0.02)
-    renderer.render(scene, camera)
+    for (const [id, target] of Object.entries(player_targets)) {
+        player_map[id].position.lerp(target, 0.02)
+    }
 
+    renderer.render(scene, camera)
 
     stats.update()
 }
