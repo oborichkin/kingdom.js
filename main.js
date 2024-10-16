@@ -212,11 +212,15 @@ function onDoubleClick(event) {
 
 // Animation loop
 function animate() {
-    requestAnimationFrame(animate);
-    TWEEN.update(); // Update TWEEN animations
+    render();
     updateRotateSpeed(); // Update rotate speed based on distance
     planets.forEach(planet => planet.updateVisibilityAndTextSize(camera)); // Update visibility and text size based on distance
     controls.update(); // Update TrackballControls
+    requestAnimationFrame(animate);
+}
+
+function render() {
+    TWEEN.update();
     renderer.render(scene, camera);
 }
 
