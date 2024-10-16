@@ -1,162 +1,169 @@
-import * as THREE from 'three'
-import Stats from 'stats.js'
-import { MapControls } from 'three/addons/controls/MapControls.js';
-import { randFloat } from 'three/src/math/MathUtils.js';
+// Import necessary Three.js components
+import * as THREE from 'three';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 
-const stats = new Stats();
-stats.showPanel(0)
-document.body.appendChild(stats.dom)
+// Create a scene
+const scene = new THREE.Scene();
 
-let renderer, scene, camera, controls;
+// Create a camera with a smaller near clipping plane
+const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.01, 1000); // Adjusted near plane
+camera.position.z = 5;
 
-const websocket = new WebSocket("ws://localhost:8001")
+// Create a renderer
+const renderer = new THREE.WebGLRenderer();
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
 
-let player_map = {}
-let player_targets = {}
+// Add orbital controls with a minimum distance
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.minDistance = 1.01; // Set minimum distance slightly larger than sphere radius
+controls.enableDamping = true; // Enable damping (inertia)
+controls.dampingFactor = 0.05; // Damping factor
 
-const player_id = crypto.randomUUID()
-const currentPosition = new THREE.Vector3(randFloat(-50, 50), 0, randFloat(-50, 50))
-player_targets[player_id] = currentPosition
+// Function to update rotate speed based on camera distance
+function updateRotateSpeed() {
+    const distance = camera.position.distanceTo(scene.position);
+    const maxDistance = 10; // Define a maximum distance for scaling
+    const minSpeed = 0.003; // Minimum rotate speed
+    const maxSpeed = 1.0; // Maximum rotate speed
 
-const TERRAIN_LAYER = 1
-
-// renderer
-renderer = new THREE.WebGLRenderer()
-renderer.setSize(window.innerWidth, window.innerHeight)
-document.body.appendChild(renderer.domElement)
-
-// scene
-scene = new THREE.Scene()
-
-// camera
-// source: https://stackoverflow.com/questions/23450588/isometric-camera-with-three-js
-const aspect = window.innerWidth / window.innerHeight
-const d = 60
-camera = new THREE.OrthographicCamera(-d*aspect, d*aspect, d, -d, -100, 1000)
-
-camera.position.set(20, 20, 20)
-camera.lookAt(scene.position)
-
-// controls
-controls = new MapControls(camera, renderer.domElement)
-controls.enableDamping = true
-controls.maxPolarAngle = Math.PI / 2
-
-// ambient
-scene.add(new THREE.AmbientLight(0x444444))
-
-// light
-const light = new THREE.PointLight(0xffffff, 0.8)
-light.position.set(0, 50, 50)
-scene.add(light)
-
-// raycaster
-const raycaster = new THREE.Raycaster()
-raycaster.layers.set(1)
-const pointer = new THREE.Vector2()
-
-window.addEventListener('pointermove', (event) => {
-    pointer.x = (event.clientX / window.innerWidth) * 2 - 1
-    pointer.y = - (event.clientY / window.innerHeight) * 2 + 1
-})
-
-scene.add(new THREE.AxesHelper(40))
-
-// grid
-const geometry = new THREE.PlaneGeometry(100, 100, 10, 10)
-const material = new THREE.MeshBasicMaterial({ wireframe: true, opacity: 0.5, transparent: true})
-const grid = new THREE.Mesh(geometry, material)
-grid.rotation.order = "YXZ"
-grid.rotation.y = - Math.PI / 2
-grid.rotation.x = - Math.PI / 2
-grid.layers.enable(1)
-scene.add(grid)
-
-const geometry2 = new THREE.BoxGeometry(10, 10, 10)
-const material2 = new THREE.MeshNormalMaterial()
-const mesh = new THREE.Mesh(geometry2, material2)
-mesh.position.set(currentPosition.x, currentPosition.y, currentPosition.z)
-scene.add(mesh)
-player_map[player_id] = mesh
-
-
-window.addEventListener('click', (event) => {
-    raycaster.setFromCamera(pointer, camera)
-    const intersects = raycaster.intersectObjects(scene.children)
-
-    if (intersects.length > 0) {
-        player_targets[player_id] = new THREE.Vector3(...intersects[0].point)
-        websocket.send(JSON.stringify({type: "update", id: player_id, target: {...intersects[0].point}}))
-    }
-
-})
-
-websocket.onopen = function (event) {
-    websocket.send(JSON.stringify({
-        type: "init",
-        id: player_id,
-        x: mesh.position.x,
-        y: mesh.position.y,
-        z: mesh.position.z
-    }))
+    // Calculate rotate speed based on distance, scaling between minSpeed and maxSpeed
+    controls.rotateSpeed = minSpeed + (maxSpeed - minSpeed) * (distance - controls.minDistance) / (maxDistance - controls.minDistance);
+    controls.rotateSpeed = Math.min(maxSpeed, Math.max(minSpeed, controls.rotateSpeed)); // Clamp the speed
 }
 
-websocket.addEventListener("message", ({ data }) => {
-    const event = JSON.parse(data)
-    switch (event.type) {
-        case "init":
-            for (const [id, remote_data] of Object.entries(event.players)) {
-                var geo = new THREE.BoxGeometry(10, 10, 10)
-                var mat = new THREE.MeshNormalMaterial()
-                var mesh = new THREE.Mesh(geo, mat)
-                mesh.position.setX(remote_data.position.x)
-                mesh.position.setY(remote_data.position.y)
-                mesh.position.setZ(remote_data.position.z)
-                scene.add(mesh)
-                player_map[id] = mesh
-                player_targets[id] = new THREE.Vector3(remote_data.target.x, remote_data.target.y, remote_data.target.z)
-            }
-            break;
-        case "remove":
-            player_map[event.id].geometry.dispose()
-            player_map[event.id].material.dispose()
-            scene.remove(player_map[event.id])
-            delete player_map[event.id]
-            delete player_targets[event.id]
-            break;
-        case "add":
-            var geo = new THREE.BoxGeometry(10, 10, 10)
-            var mat = new THREE.MeshNormalMaterial()
-            var mesh = new THREE.Mesh(geo, mat)
-            mesh.position.setX(event.x)
-            mesh.position.setY(event.y)
-            mesh.position.setZ(event.z)
-            scene.add(mesh)
-            player_map[event.id] = mesh
-            player_targets[event.id] = new THREE.Vector3(mesh.position.x, mesh.position.y, mesh.position.z)
-            break;
-        case "update":
-            if (event.id != player_id && event.id in player_map) {
-                player_targets[event.id] = new THREE.Vector3(event.target.x, event.target.y, event.target.z)
-            }
-            break;
-        default:
-            throw new Error(`Unsupported event type: ${event.type}`)
+// Class to create a planet with LOD, sprite, and text
+class Planet {
+    constructor(name, texturePath, position, size, color = null) {
+        this.name = name;
+        this.texturePath = texturePath;
+        this.position = position;
+        this.size = size;
+        this.color = color;
+
+        this.lod = this.createLOD();
+        this.planetGroup = this.createSpriteAndText();
+
+        scene.add(this.lod);
+        scene.add(this.planetGroup);
     }
-})
 
+    createLOD() {
+        const lod = new THREE.LOD();
+        const textureLoader = new THREE.TextureLoader();
+        const texture = this.texturePath ? textureLoader.load(this.texturePath) : null;
 
+        const geometries = [
+            new THREE.SphereGeometry(this.size, 128, 128),
+            new THREE.SphereGeometry(this.size, 64, 64),
+            new THREE.SphereGeometry(this.size, 32, 32)
+        ];
+
+        geometries.forEach((geometry, index) => {
+            const distance = index * this.size * 2;
+            const material = texture
+                ? new THREE.MeshBasicMaterial({ map: texture })
+                : new THREE.MeshBasicMaterial({ color: this.color });
+            const mesh = new THREE.Mesh(geometry, material);
+            lod.addLevel(mesh, distance);
+        });
+
+        lod.position.copy(this.position);
+        return lod;
+    }
+
+    createSpriteAndText() {
+        const group = new THREE.Object3D();
+
+        // Create sprite
+        const circleCanvas = document.createElement('canvas');
+        circleCanvas.width = 128;
+        circleCanvas.height = 128;
+        const circleContext = circleCanvas.getContext('2d');
+        circleContext.beginPath();
+        circleContext.arc(64, 64, 64, 0, Math.PI * 2, false);
+        circleContext.fillStyle = this.color ? this.color : 'white';
+        circleContext.fill();
+        const circleTexture = new THREE.CanvasTexture(circleCanvas);
+        const spriteMaterial = new THREE.SpriteMaterial({ map: circleTexture });
+        const sprite = new THREE.Sprite(spriteMaterial);
+        sprite.scale.set(this.size * 2, this.size * 2, 1);
+        group.add(sprite);
+
+        // Create text
+        const textCanvas = document.createElement('canvas');
+        textCanvas.width = 256;
+        textCanvas.height = 64;
+        const textContext = textCanvas.getContext('2d');
+        textContext.font = 'Bold 24px Verdana';
+        textContext.fillStyle = 'white';
+
+        const text = this.name;
+        const textWidth = textContext.measureText(text).width;
+        textContext.fillText(text, (textCanvas.width - textWidth) / 2, 40);
+        const textTexture = new THREE.CanvasTexture(textCanvas);
+        const textMaterial = new THREE.SpriteMaterial({ map: textTexture });
+        const textSprite = new THREE.Sprite(textMaterial);
+        textSprite.scale.set(this.size * 10, this.size * 10 * (textCanvas.height / textCanvas.width), 1);
+        textSprite.position.set(0, this.size * 1.3, 0);
+        group.add(textSprite);
+
+        group.position.copy(this.position);
+        return group;
+    }
+
+    updateVisibilityAndTextSize(camera) {
+        const distance = camera.position.distanceTo(this.position);
+        if (distance > this.size * 20) {
+            this.lod.visible = false;
+            this.planetGroup.visible = true;
+
+            const scaleFactor = distance / (this.size * 5);
+            this.planetGroup.children[1].scale.set(scaleFactor, scaleFactor * (64 / 256), 1);
+
+            const upDirection = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion).normalize();
+            this.planetGroup.children[1].position.copy(this.planetGroup.children[0].position).addScaledVector(upDirection, this.size * 1.5);
+        } else {
+            this.lod.visible = true;
+            this.planetGroup.visible = false;
+        }
+    }
+}
+
+// Function to generate a random position within a certain range
+function randomPosition(range) {
+    const minDistance = range * 0.5; // Ensure a minimum distance from the center
+    const randomVector = new THREE.Vector3(
+        Math.random() - 0.5,
+        Math.random() - 0.5,
+        Math.random() - 0.5
+    ).normalize();
+
+    const distance = minDistance + Math.random() * (range - minDistance);
+    return randomVector.multiplyScalar(distance);
+}
+
+const earth = new Planet('Earth', '8k_earth_daymap.jpg', new THREE.Vector3(0, 0, 0), 1, 'blue');
+let planets = [earth];
+// Generate 5 random planets with different colors
+const planetNames = ['Mars', 'Venus', 'Jupiter', 'Saturn', 'Neptune'];
+const planetColors = ['orange', 'yellow', 'brown', 'gold', 'cyan']; // Define unique colors for each planet
+const randomPlanets = planetNames.map((name, index) => {
+    const size = Math.random() * 0.5 + 0.5; // Random size between 0.5 and 1
+    const position = randomPosition(10); // Random position within a 10x10x10 cube
+    return new Planet(name, null, position, size, planetColors[index]); // Assign color
+});
+
+// Add the random planets to the planets array
+planets = planets.concat(randomPlanets);
+
+// Animation loop
 function animate() {
-
-    controls.update()
-
-    for (const [id, target] of Object.entries(player_targets)) {
-        player_map[id].position.lerp(target, 0.02)
-    }
-
-    renderer.render(scene, camera)
-
-    stats.update()
+    requestAnimationFrame(animate);
+    updateRotateSpeed(); // Update rotate speed based on distance
+    planets.forEach(planet => planet.updateVisibilityAndTextSize(camera)); // Update visibility and text size based on distance
+    controls.update();
+    renderer.render(scene, camera);
 }
 
-renderer.setAnimationLoop( animate );
+animate();
