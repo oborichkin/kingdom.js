@@ -1,6 +1,7 @@
 // Import necessary Three.js components
 import * as THREE from 'three';
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { TrackballControls } from 'three/examples/jsm/controls/TrackballControls.js';
+import TWEEN from 'https://cdn.jsdelivr.net/npm/@tweenjs/tween.js@18.5.0/dist/tween.esm.js';
 
 // Create a scene
 const scene = new THREE.Scene();
@@ -14,22 +15,25 @@ const renderer = new THREE.WebGLRenderer();
 renderer.setSize(window.innerWidth, window.innerHeight);
 document.body.appendChild(renderer.domElement);
 
-// Add orbital controls with a minimum distance
-const controls = new OrbitControls(camera, renderer.domElement);
+// Replace OrbitControls with TrackballControls
+const controls = new TrackballControls(camera, renderer.domElement);
 controls.minDistance = 1.01; // Set minimum distance slightly larger than sphere radius
-controls.enableDamping = true; // Enable damping (inertia)
-controls.dampingFactor = 0.05; // Damping factor
+controls.dynamicDampingFactor = 0.05; // Damping factor
+
+// Adjust rotation and zoom speeds
+controls.rotateSpeed = 2.0; // Increase rotation speed
+controls.zoomSpeed = 0.09; // Decrease zoom speed
 
 // Function to update rotate speed based on camera distance
 function updateRotateSpeed() {
     const distance = camera.position.distanceTo(scene.position);
     const maxDistance = 10; // Define a maximum distance for scaling
     const minSpeed = 0.003; // Minimum rotate speed
-    const maxSpeed = 1.0; // Maximum rotate speed
+    const maxSpeed = 2.0; // Maximum rotate speed
 
     // Calculate rotate speed based on distance, scaling between minSpeed and maxSpeed
     controls.rotateSpeed = minSpeed + (maxSpeed - minSpeed) * (distance - controls.minDistance) / (maxDistance - controls.minDistance);
-    controls.rotateSpeed = Math.min(maxSpeed, Math.max(minSpeed, controls.rotateSpeed)); // Clamp the speed
+    controls.rotateSpeed = 5 * Math.min(maxSpeed, Math.max(minSpeed, controls.rotateSpeed)); // Clamp the speed
 }
 
 // Class to create a planet with LOD, sprite, and text
@@ -157,13 +161,103 @@ const randomPlanets = planetNames.map((name, index) => {
 // Add the random planets to the planets array
 planets = planets.concat(randomPlanets);
 
+// Add event listener for double-click
+window.addEventListener('dblclick', onDoubleClick, false);
+
+const raycaster = new THREE.Raycaster();
+const mouse = new THREE.Vector2();
+
+function onDoubleClick(event) {
+    // Calculate mouse position in normalized device coordinates
+    mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+    mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+    // Update the raycaster with the camera and mouse position
+    raycaster.setFromCamera(mouse, camera);
+
+    // Calculate objects intersecting the ray
+    const intersects = raycaster.intersectObjects(planets.map(planet => planet.lod), true);
+
+    if (intersects.length > 0) {
+        const intersectedObject = intersects[0].object;
+        const intersectedLOD = intersectedObject.parent; // Get the LOD object
+
+        // Get the world position of the LOD
+        const worldPosition = new THREE.Vector3();
+        intersectedLOD.getWorldPosition(worldPosition);
+
+        // Calculate the direction vector from the camera to the planet
+        const direction = new THREE.Vector3().subVectors(worldPosition, camera.position).normalize();
+
+        // Calculate the new camera position by moving along the direction vector
+        const desiredDistance = 5; // Desired distance from the planet
+        const targetPosition = worldPosition.clone().sub(direction.multiplyScalar(desiredDistance));
+
+        // Smoothly move the camera to the target position
+        new TWEEN.Tween(camera.position)
+            .to(targetPosition, 1000) // 1 second duration
+            .easing(TWEEN.Easing.Quadratic.Out)
+            .start();
+
+        // Smoothly move the controls target to the world position
+        new TWEEN.Tween(controls.target)
+            .to(worldPosition, 1000) // 1 second duration
+            .easing(TWEEN.Easing.Quadratic.Out)
+            .onUpdate(() => {
+                controls.update(); // Ensure controls are updated during the tween
+            })
+            .start();
+    }
+}
+
 // Animation loop
 function animate() {
     requestAnimationFrame(animate);
+    TWEEN.update(); // Update TWEEN animations
     updateRotateSpeed(); // Update rotate speed based on distance
     planets.forEach(planet => planet.updateVisibilityAndTextSize(camera)); // Update visibility and text size based on distance
-    controls.update();
+    controls.update(); // Update TrackballControls
     renderer.render(scene, camera);
 }
 
 animate();
+
+// Function to create a starry skybox
+function createStarrySkybox() {
+    const size = 1000; // Size of the skybox
+    const starDensity = 0.0005; // Density of stars
+
+    // Create a canvas for the starry texture
+    const canvas = document.createElement('canvas');
+    canvas.width = 1024;
+    canvas.height = 1024;
+    const context = canvas.getContext('2d');
+
+    // Fill the canvas with black
+    context.fillStyle = 'black';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Draw random white dots for stars with varying sizes
+    context.fillStyle = 'white';
+    for (let i = 0; i < canvas.width * canvas.height * starDensity; i++) {
+        const x = Math.random() * canvas.width;
+        const y = Math.random() * canvas.height;
+        const radius = Math.random() * 1.5 + 0.5; // Random radius between 0.5 and 2.0
+        context.beginPath();
+        context.arc(x, y, radius, 0, Math.PI * 0.5, false);
+        context.fill();
+    }
+
+    // Create a texture from the canvas
+    const texture = new THREE.CanvasTexture(canvas);
+
+    // Create a large cube with the starry texture
+    const geometry = new THREE.BoxGeometry(size, size, size);
+    const material = new THREE.MeshBasicMaterial({ map: texture, side: THREE.BackSide });
+    const skybox = new THREE.Mesh(geometry, material);
+
+    scene.add(skybox);
+}
+
+// Call the function to create the skybox
+createStarrySkybox();
